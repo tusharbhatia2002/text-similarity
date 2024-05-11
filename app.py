@@ -1,37 +1,64 @@
-from flask import Flask, request, jsonify
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
+from flask import Flask, request, render_template, jsonify
+import tensorflow as tf
+import numpy as np
+import cv2
+from PIL import Image
 from flask_cors import CORS
 
-# Load the pre-trained sentence transformer model
-model = SentenceTransformer('paraphrase-MiniLM-L6-v2')
-
-# Initialize Flask application
 app = Flask(__name__)
 CORS(app)
 
-# Define API endpoint for similarity prediction
-@app.route('/', methods=['POST'])
-def predict_similarity():
-    # Get text inputs from the request body
-    request_data = request.get_json()
-    text1 = request_data['text1']
-    text2 = request_data['text2']
+from keras.models import model_from_json
+json_file = open('66k-50epochs.json', 'r')
+loaded_model_json = json_file.read()
+json_file.close()
+loaded_model = model_from_json(loaded_model_json)
 
-    # Encode text inputs using the pre-trained model
-    embeddings_text1 = model.encode(text1, convert_to_tensor=True).cpu()
-    embeddings_text2 = model.encode(text2, convert_to_tensor=True).cpu()
+# Load the pre-trained MobileNetV2 model
+loaded_model.load_weights("66k-mobilenetv2-50epochs-76.85.h5")
+loaded_model.compile(optimizer='adam',loss='sparse_categorical_crossentropy', metrics=['accuracy'])
 
-    # Calculate cosine similarity between embeddings
-    similarity_score = cosine_similarity(embeddings_text1.reshape(1, -1), embeddings_text2.reshape(1, -1))[0][0]
-    
-    # Convert similarity score to a JSON serializable format (float)
-    similarity_score = float(similarity_score)
+# Define a list of class labels corresponding to skin diseases
+class_labels = ["Actinic keratoses and intraepithelial carcinoma / Bowen's disease",
+'Basal cell carcinoma',
+'Benign keratosis-like lesions (solar lentigines / seborrheic keratoses and lichen-planus like keratoses)',
+'Dermatofibroma',
+'Melanoma',
+'Melanocytic nevi',
+'Vascular lesions (angiomas, angiokeratomas, pyogenic granulomas and hemorrhage)',
+'Vitiligo']
 
-    # Return response with similarity score
-    response = {'similarity score': similarity_score}
-    return jsonify(response)
+@app.route('/')
+def index():
+    return render_template('index.html')
 
-# Run the Flask application
+@app.route('/predict', methods=['POST'])
+def predict():
+    try:
+        # Get the image file from the POST request
+        file = request.files['image']
+
+        # Read and preprocess the image
+        image = Image.open(file)
+        image = image.resize((224, 224))
+        image = np.array(image)
+        image = image / 1.0
+        image = np.expand_dims(image, axis=0)
+
+        # Make a prediction
+        predictions = loaded_model.predict(image)
+        score = max(predictions[0]*100)
+        score = str(score)
+
+        # Get the predicted class label
+        predicted_class = class_labels[np.argmax(predictions)]
+        
+        
+
+        return {'score': score, 'prediction':predicted_class}
+
+    except Exception as e:
+        return jsonify({'error': str(e)})
+
 if __name__ == '__main__':
     app.run(debug=True, port = 8080)
